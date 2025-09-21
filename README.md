@@ -1,36 +1,86 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Jump Over the Baka
 
-## Getting Started
+## 1. Synopsis / Introduction
+**Jump Over the Baka** is a real-time multiplayer browser game inspired by the traditional Filipino children's game **“Luksong Baka”**.  
+Players take turns jumping over a **Baka** (cow) obstacle that grows taller as the game progresses. The goal is to jump over the Baka without touching it, increasing the level and score with each successful round.  
 
-First, run the development server:
+The game uses **Socket.IO** for real-time multiplayer synchronization between clients and a **Node.js** server.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+---
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 2. Controls / Instructions
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+- **Arrow Left / Arrow Right:** Move your player left or right.  
+- **Spacebar:** Jump over the Baka.  
+- **R key:** Restart the game after a game-over or to reset levels.  
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+**Objective:** Both players must jump over the Baka to increase the level and score. Avoid touching the Baka.
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## 3. Event-to-Code Mapping (EVD Mapping)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Event                 | Description / Code Handling |
+|-----------------------|----------------------------|
+| `connection`          | Triggered when a new player joins. Assigns player index and updates ready status. |
+| `join`                | Triggered when a player joins the game session. Updates message to start jumping. |
+| `move`                | Triggered when a player moves/jumps. Updates player position, collision detection, level progression, and broadcasts state. |
+| `restart`             | Triggered when a player presses "R". Resets game state and broadcasts update. |
+| `disconnect`          | Triggered when a player leaves. Updates ready status and resets message. |
+| `assignPlayer` (client) | Server assigns player index to client. |
+| `state` (client)      | Server broadcasts updated game state to clients. |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+---
 
-## Deploy on Vercel
+## 4. Events Used
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- **Server-side:** `connection`, `join`, `move`, `restart`, `disconnect`  
+- **Client-side:** `assignPlayer`, `state`  
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+## 5. APIs Used
+
+- **Socket.IO:** Real-time bidirectional communication between client and server.  
+- **Node.js HTTP:** Creates a server to host the Socket.IO server.  
+- **Canvas API:** Renders players, Baka, and game information on the client.  
+- **React Hooks (useState, useEffect, useRef):** Manage state and side effects for the game.  
+- **Lodash throttle:** Limits the frequency of sending player movement updates to the server.  
+
+---
+
+## 6. API Code Snippets / Usage
+
+### Server (Node.js + Socket.IO)
+```javascript
+const http = require("http");
+const { Server } = require("socket.io");
+
+const httpServer = http.createServer();
+const io = new Server(httpServer, { cors: { origin: "*" } });
+
+io.on("connection", socket => {
+  // Assign player, handle move, restart, disconnect
+  socket.on("move", data => { /* handle player movement */ });
+  socket.on("restart", () => { /* reset game */ });
+});
+
+httpServer.listen(3001, () => console.log("Server running"));
+
+Client (React + Canvas + Socket.IO)
+import io from "socket.io-client";
+
+const socket = io("http://localhost:3001");
+
+socket.on("assignPlayer", idx => setPlayerIndex(idx));
+socket.on("state", state => { /* update canvas */ });
+socket.emit("join");
+socket.emit("move", { index: playerIndex, player: updatedPlayer });
+socket.emit("restart");
+
+Canvas Rendering
+const ctx = canvasRef.current.getContext("2d");
+ctx.clearRect(0, 0, WIDTH, HEIGHT);
+ctx.fillRect(baka.x, baka.y - baka.height, BAKA_WIDTH, baka.height);
+ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, 2*Math.PI);
+ctx.fill();
