@@ -1,5 +1,5 @@
-import Arena3D from "../components/Arena3D";
+import ArenaMultiplayer from "../components/game/ArenaMultiplayer";
 
-export default function HomePage() {
-  return <Arena3D />;
+export default function GamePage() {
+  return <ArenaMultiplayer />;
 }
