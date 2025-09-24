@@ -8,53 +8,49 @@ const PLAYER_SPEED = 7, GRAVITY = 0.6;
 export default function Arena3D() {
   const canvasRef = useRef();
   const socketRef = useRef();
-  const playersRef = useRef([{ x: 80, y: GROUND_Y, vy: 0, jumping: false, crossed: false }, { x: 160, y: GROUND_Y, vy: 0, jumping: false, crossed: false }]);
-  const bakaRef = useRef({ x: WIDTH/2 - BAKA_WIDTH/2, y: GROUND_Y+20, height: BAKA_HEIGHT });
-  const [playerIndex, setPlayerIndex] = useState(null);
+  const playersRef = useRef([{ x: 80, y: GROUND_Y, vy: 0, jumping:false, crossed:false }, { x:160, y:GROUND_Y, vy:0, jumping:false, crossed:false }]);
+  const bakaRef = useRef({ x: WIDTH/2-BAKA_WIDTH/2, y: GROUND_Y+20, height:BAKA_HEIGHT });
   const keysRef = useRef({});
+  const [playerIndex, setPlayerIndex] = useState(null);
+  const [message, setMessage] = useState("Waiting for another player...");
 
-  useEffect(() => {
-    socketRef.current = io("https://luksong-baka-nextjs-game.onrender.com", {
-      transports: ["websocket"], path: "/socket.io"
-    });
+  useEffect(()=>{
+    socketRef.current = io("https://luksong-baka-nextjs-game.onrender.com",{ transports:["websocket"], path:"/socket.io" });
 
-    socketRef.current.on("assignPlayer", idx => setPlayerIndex(idx));
-
-    socketRef.current.on("state", state => {
+    socketRef.current.on("assignPlayer", idx=> setPlayerIndex(idx));
+    socketRef.current.on("state", state=>{
       playersRef.current = state.players;
       bakaRef.current = state.baka;
+      setMessage(state.message);
     });
 
-    return () => socketRef.current.disconnect();
-  }, []);
+    return ()=> socketRef.current.disconnect();
+  },[]);
 
-  useEffect(() => {
-    const down = e => keysRef.current[e.key] = true;
-    const up = e => keysRef.current[e.key] = false;
+  useEffect(()=>{
+    const down = e=> keysRef.current[e.key]=true;
+    const up = e=> keysRef.current[e.key]=false;
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
-    return () => {
+    return ()=>{
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, []);
+  },[]);
 
-  useEffect(() => {
-    let anim;
-    const loop = () => {
+  useEffect(()=>{
+    const anim = ()=>{
+      if(playerIndex===null) return requestAnimationFrame(anim);
       const p = playersRef.current[playerIndex];
-      if (p) {
-        if (keysRef.current.ArrowLeft) p.x -= PLAYER_SPEED;
-        if (keysRef.current.ArrowRight) p.x += PLAYER_SPEED;
-        if ((keysRef.current[" "] || keysRef.current.Spacebar) && !p.jumping && p.y >= GROUND_Y) {
-          p.vy = -12; p.jumping = true;
-        }
+      if(p){
+        if(keysRef.current.ArrowLeft) p.x-=PLAYER_SPEED;
+        if(keysRef.current.ArrowRight) p.x+=PLAYER_SPEED;
+        if((keysRef.current[" "]||keysRef.current.Spacebar) && !p.jumping && p.y>=GROUND_Y){p.vy=-12;p.jumping=true;}
+        p.vy+=GRAVITY;
+        p.y+=p.vy;
+        if(p.y>=GROUND_Y){p.y=GROUND_Y;p.vy=0;p.jumping=false;}
 
-        p.vy += GRAVITY;
-        p.y += p.vy;
-        if (p.y >= GROUND_Y) { p.y = GROUND_Y; p.vy = 0; p.jumping = false; }
-
-        socketRef.current.emit("move", { index: playerIndex, player: p });
+        socketRef.current.emit("move",{index:playerIndex,player:p});
       }
 
       const ctx = canvasRef.current.getContext("2d");
@@ -68,11 +64,13 @@ export default function Arena3D() {
         ctx.fillStyle="#3498db"; ctx.fill(); ctx.strokeStyle="#222"; ctx.lineWidth=3; ctx.stroke();
       });
 
-      anim = requestAnimationFrame(loop);
+      requestAnimationFrame(anim);
     };
-    anim = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(anim);
-  }, [playerIndex]);
+    requestAnimationFrame(anim);
+  },[playerIndex]);
 
-  return <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} style={{ background:"#222", borderRadius:12 }} />;
+  return <>
+    <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} style={{background:"#222",borderRadius:12}} />
+    <div style={{color:"#fff",marginTop:10}}>{message}</div>
+  </>;
 }
