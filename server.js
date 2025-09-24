@@ -1,10 +1,8 @@
-// server.js
 const express = require("express");
 const http = require("http");
 const next = require("next");
 const { Server } = require("socket.io");
 
-// --- 1. Game Configuration ---
 const GAME_CONFIG = {
   WIDTH: 800,
   HEIGHT: 400,
@@ -18,7 +16,6 @@ const GAME_CONFIG = {
   ROUND_DELAY: 3500,
 };
 
-// --- 2. Game State ---
 let gameState = createInitialState();
 
 function createInitialState() {
@@ -35,7 +32,6 @@ function createInitialState() {
   };
 }
 
-// --- 3. Prepare Next.js ---
 const dev = process.env.NODE_ENV !== "production";
 const nextApp = next({ dev });
 const handle = nextApp.getRequestHandler();
@@ -43,15 +39,11 @@ const handle = nextApp.getRequestHandler();
 nextApp.prepare().then(() => {
   const app = express();
   const server = http.createServer(app);
-  const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] },
-  });
+  const io = new Server(server, { cors: { origin: "*", methods: ["GET","POST"] } });
 
-  // --- Health check ---
-  app.get("/health", (req, res) => res.send("✅ Luksong Baka server running!"));
-  app.use((req, res) => handle(req, res));
+  app.get("/health", (req, res) => res.send("✅ Server running!"));
+  app.use((req,res) => handle(req,res));
 
-  // --- Game Functions ---
   function resetGame() {
     if (gameState.levelIncreaseTimeout) clearTimeout(gameState.levelIncreaseTimeout);
     gameState = createInitialState();
@@ -61,7 +53,6 @@ nextApp.prepare().then(() => {
     if (!gameState.players[index] || gameState.gameOver) return;
     gameState.players[index] = { ...gameState.players[index], ...moveData };
 
-    // collision
     const player = gameState.players[index];
     const bakaTop = gameState.baka.y - gameState.baka.height;
     const bakaLeft = gameState.baka.x;
@@ -87,10 +78,17 @@ nextApp.prepare().then(() => {
     gameState.message = "Next round soon!";
     gameState.levelIncreaseTimeout = setTimeout(() => {
       gameState.score++;
-      gameState.baka.height += GAME_CONFIG.BAKA_HEIGHT_INCREASE;
+      if (gameState.score >= GAME_CONFIG.LEVEL_LIMIT) {
+        gameState.message = `🎉 Congratulations! Level ${GAME_CONFIG.LEVEL_LIMIT}, resetting.`;
+        gameState.score = 0;
+        gameState.baka.height = GAME_CONFIG.BAKA_BASE_HEIGHT;
+      } else {
+        gameState.message = "Jump over!";
+        gameState.baka.height += GAME_CONFIG.BAKA_HEIGHT_INCREASE;
+      }
 
-      gameState.players.forEach((p, i) => {
-        p.x = i === 0 ? 80 : 160;
+      gameState.players.forEach((p,i)=>{
+        p.x = i===0?80:160;
         p.y = GAME_CONFIG.GROUND_Y;
         p.vy = 0;
         p.jumping = false;
@@ -98,7 +96,6 @@ nextApp.prepare().then(() => {
       });
 
       gameState.levelIncreaseTimeout = null;
-      gameState.message = "Jump over!";
     }, GAME_CONFIG.ROUND_DELAY);
   }
 
@@ -106,15 +103,12 @@ nextApp.prepare().then(() => {
     return gameState.players.findIndex(p => !p.connected);
   }
 
-  // --- 4. Socket.io ---
-  io.on("connection", (socket) => {
+  io.on("connection", socket => {
     console.log(`⚡ Connected: ${socket.id}`);
-
-    const duplicate = gameState.players.find(p => p.id === socket.id);
-    if (duplicate) return;
+    if (gameState.players.find(p=>p.id===socket.id)) return;
 
     const idx = findEmptyPlayerSlot();
-    if (idx === -1) {
+    if (idx===-1) {
       console.log("Server full → spectator");
       socket.emit("state", gameState);
       return;
@@ -124,22 +118,19 @@ nextApp.prepare().then(() => {
     gameState.players[idx].connected = true;
     socket.emit("assignPlayer", idx);
 
-    socket.on("move", (data) => handlePlayerMove(data.index, data.player));
+    socket.on("move", data => handlePlayerMove(data.index, data.player));
     socket.on("restart", resetGame);
 
     socket.on("disconnect", () => {
       console.log(`❌ Disconnected: ${socket.id}`);
-      const idx = gameState.players.findIndex(p => p.id === socket.id);
-      if (idx !== -1) gameState.players[idx] = { ...gameState.players[idx], connected: false, id: null };
+      const idx = gameState.players.findIndex(p=>p.id===socket.id);
+      if(idx!==-1) gameState.players[idx]={...gameState.players[idx],connected:false,id:null};
     });
   });
 
-  // --- 5. Server Tick (30fps) ---
-  setInterval(() => {
-    io.emit("state", gameState);
-  }, 1000 / 30);
+  // Server tick: broadcast at 30fps
+  setInterval(()=> io.emit("state", gameState), 1000/30);
 
-  // --- 6. Start Server ---
   const PORT = process.env.PORT || 3000;
-  server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  server.listen(PORT, ()=>console.log(`🚀 Server running on port ${PORT}`));
 });
