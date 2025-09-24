@@ -1,38 +1,34 @@
-// server.js
 const express = require("express");
 const http = require("http");
 const next = require("next");
 const { Server } = require("socket.io");
 
-// --- 1. Game Configuration ---
 const GAME_CONFIG = {
   WIDTH: 800,
   HEIGHT: 400,
   PLAYER_RADIUS: 30,
   BAKA_WIDTH: 80,
   BAKA_BASE_HEIGHT: 60,
-  GROUND_Y: 400 - 60,
+  GROUND_Y: 340,
   LEVEL_LIMIT: 10,
   BASE_JUMP_VY: -12,
   JUMP_INCREASE_PER_LEVEL: -1,
   BAKA_HEIGHT_INCREASE: 18,
   ROUND_DELAY: 3500,
+  GRAVITY: 0.6,
+  PLAYER_SPEED: 7,
+  TICK_RATE: 60, // physics updates per second
 };
 
-// --- 2. Centralized Game State ---
 let gameState = createInitialState();
 
 function createInitialState() {
   return {
     players: [
-      { id: null, x: 80, y: GAME_CONFIG.GROUND_Y, vy: 0, jumping: false, crossed: false, connected: false },
-      { id: null, x: 160, y: GAME_CONFIG.GROUND_Y, vy: 0, jumping: false, crossed: false, connected: false },
+      { id: null, x: 80, y: GAME_CONFIG.GROUND_Y, vy: 0, jumping: false, crossed: false, input: {} },
+      { id: null, x: 160, y: GAME_CONFIG.GROUND_Y, vy: 0, jumping: false, crossed: false, input: {} },
     ],
-    baka: {
-      x: GAME_CONFIG.WIDTH / 2 - GAME_CONFIG.BAKA_WIDTH / 2,
-      y: GAME_CONFIG.GROUND_Y + 20,
-      height: GAME_CONFIG.BAKA_BASE_HEIGHT,
-    },
+    baka: { x: GAME_CONFIG.WIDTH / 2 - GAME_CONFIG.BAKA_WIDTH / 2, y: GAME_CONFIG.GROUND_Y + 20, height: GAME_CONFIG.BAKA_BASE_HEIGHT },
     score: 0,
     gameOver: false,
     message: "Waiting for players to connect...",
@@ -40,7 +36,6 @@ function createInitialState() {
   };
 }
 
-// --- 3. Prepare Next.js ---
 const dev = process.env.NODE_ENV !== "production";
 const nextApp = next({ dev });
 const handle = nextApp.getRequestHandler();
@@ -48,163 +43,120 @@ const handle = nextApp.getRequestHandler();
 nextApp.prepare().then(() => {
   const app = express();
   const server = http.createServer(app);
-
   const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] },
-    transports: ["websocket", "polling"], // ensure fallback works
   });
 
-  // --- Health check route ---
-  app.get("/health", (req, res) => {
-    res.send("✅ Luksong Baka server is running!");
-  });
-
-  // Serve Next.js pages correctly
+  app.get("/health", (req, res) => res.send("✅ Luksong Baka server is running!"));
   app.use((req, res) => handle(req, res));
 
-  // --- 4. Game logic functions ---
-  function resetGame() {
-    if (gameState.levelIncreaseTimeout) clearTimeout(gameState.levelIncreaseTimeout);
-    gameState = createInitialState();
-
-    io.allSockets().then((sockets) => {
-      sockets.forEach((socketId) => {
-        const playerIndex = findEmptyPlayerSlot();
-        if (playerIndex !== -1) {
-          gameState.players[playerIndex].id = socketId;
-          gameState.players[playerIndex].connected = true;
-        }
-      });
-      updateGameMessage();
-      broadcastState();
-    });
-  }
-
-  function handlePlayerMove(playerIndex, moveData) {
+  // --- Server Tick Loop ---
+  setInterval(() => {
     if (gameState.gameOver) return;
 
-    gameState.players[playerIndex] = { ...gameState.players[playerIndex], ...moveData };
-    const player = gameState.players[playerIndex];
+    gameState.players.forEach((p) => {
+      if (!p.id) return;
 
-    if (checkCollision(player)) {
-      gameState.gameOver = true;
-      gameState.message = "Game Over! You touched the baka. Press R to Restart.";
-      broadcastState();
-      return;
-    }
+      // Apply input
+      if (p.input.left) p.x -= GAME_CONFIG.PLAYER_SPEED;
+      if (p.input.right) p.x += GAME_CONFIG.PLAYER_SPEED;
+      p.x = Math.max(GAME_CONFIG.PLAYER_RADIUS, Math.min(GAME_CONFIG.WIDTH - GAME_CONFIG.PLAYER_RADIUS, p.x));
 
-    if (player.y >= GAME_CONFIG.GROUND_Y && player.x > gameState.baka.x + GAME_CONFIG.BAKA_WIDTH) {
-      player.crossed = true;
-    }
-
-    const allCrossed = gameState.players.every((p) => !p.connected || p.crossed);
-    if (allCrossed && !gameState.levelIncreaseTimeout) startNextRound();
-
-    broadcastState();
-  }
-
-  function checkCollision(player) {
-    const bakaTop = gameState.baka.y - gameState.baka.height;
-    const bakaLeft = gameState.baka.x;
-    const bakaRight = gameState.baka.x + GAME_CONFIG.BAKA_WIDTH;
-
-    return (
-      player.x + GAME_CONFIG.PLAYER_RADIUS > bakaLeft &&
-      player.x - GAME_CONFIG.PLAYER_RADIUS < bakaRight &&
-      player.y + GAME_CONFIG.PLAYER_RADIUS > bakaTop &&
-      player.y - GAME_CONFIG.PLAYER_RADIUS < gameState.baka.y &&
-      player.vy > 0
-    );
-  }
-
-  function startNextRound() {
-    gameState.message = "Great! Cow gets taller. Next round in 3 seconds!";
-    broadcastState();
-
-    gameState.levelIncreaseTimeout = setTimeout(() => {
-      gameState.score++;
-      if (gameState.score >= GAME_CONFIG.LEVEL_LIMIT) {
-        gameState.message = `🎉 Congratulations! You reached level ${GAME_CONFIG.LEVEL_LIMIT}. Resetting.`;
-        gameState.score = 0;
-        gameState.baka.height = GAME_CONFIG.BAKA_BASE_HEIGHT;
-      } else {
-        gameState.message = "Jump over!";
-        gameState.baka.height += GAME_CONFIG.BAKA_HEIGHT_INCREASE;
+      // Jump
+      if (p.input.jump && !p.jumping && p.y >= GAME_CONFIG.GROUND_Y) {
+        p.vy = GAME_CONFIG.BASE_JUMP_VY;
+        p.jumping = true;
       }
 
-      gameState.players.forEach((p, idx) => {
-        p.x = idx === 0 ? 80 : 160;
+      // Gravity
+      p.vy += GAME_CONFIG.GRAVITY;
+      p.y += p.vy;
+      if (p.y >= GAME_CONFIG.GROUND_Y) {
         p.y = GAME_CONFIG.GROUND_Y;
         p.vy = 0;
         p.jumping = false;
-        p.crossed = false;
-      });
+      }
 
-      gameState.levelIncreaseTimeout = null;
-      broadcastState();
-    }, GAME_CONFIG.ROUND_DELAY);
-  }
+      // Collision
+      const bakaTop = gameState.baka.y - gameState.baka.height;
+      const bakaLeft = gameState.baka.x;
+      const bakaRight = gameState.baka.x + GAME_CONFIG.BAKA_WIDTH;
+      if (
+        p.x + GAME_CONFIG.PLAYER_RADIUS > bakaLeft &&
+        p.x - GAME_CONFIG.PLAYER_RADIUS < bakaRight &&
+        p.y + GAME_CONFIG.PLAYER_RADIUS > bakaTop &&
+        p.y - GAME_CONFIG.PLAYER_RADIUS < gameState.baka.y &&
+        p.vy > 0
+      ) {
+        gameState.gameOver = true;
+        gameState.message = "Game Over! You touched the baka. Press R to Restart.";
+      }
 
-  function findEmptyPlayerSlot() {
-    return gameState.players.findIndex((p) => !p.connected);
-  }
+      if (p.y >= GAME_CONFIG.GROUND_Y && p.x > gameState.baka.x + GAME_CONFIG.BAKA_WIDTH) {
+        p.crossed = true;
+      }
+    });
 
-  function updateGameMessage() {
-    const connectedPlayers = gameState.players.filter((p) => p.connected).length;
-    gameState.message =
-      connectedPlayers < 2 ? "Waiting for another player..." : "Press Space to Jump Over the Baka!";
-  }
+    // Check level completion
+    const allCrossed = gameState.players.every((p) => !p.id || p.crossed);
+    if (allCrossed && !gameState.levelIncreaseTimeout) {
+      gameState.levelIncreaseTimeout = setTimeout(() => {
+        gameState.score++;
+        if (gameState.score >= GAME_CONFIG.LEVEL_LIMIT) {
+          gameState.message = `🎉 Congratulations! You reached level ${GAME_CONFIG.LEVEL_LIMIT}. Resetting.`;
+          gameState.score = 0;
+          gameState.baka.height = GAME_CONFIG.BAKA_BASE_HEIGHT;
+        } else {
+          gameState.message = "Jump over!";
+          gameState.baka.height += GAME_CONFIG.BAKA_HEIGHT_INCREASE;
+        }
+        gameState.players.forEach((p, idx) => {
+          p.x = idx === 0 ? 80 : 160;
+          p.y = GAME_CONFIG.GROUND_Y;
+          p.vy = 0;
+          p.jumping = false;
+          p.crossed = false;
+        });
+        gameState.levelIncreaseTimeout = null;
+      }, GAME_CONFIG.ROUND_DELAY);
+    }
 
-  function broadcastState() {
+    // Broadcast authoritative state
     io.emit("state", gameState);
-  }
+  }, 1000 / GAME_CONFIG.TICK_RATE);
 
-  // --- 5. Networking with debugging ---
+  // --- Socket.IO Connections ---
   io.on("connection", (socket) => {
     console.log(`⚡ User connected: ${socket.id}`);
 
-    const duplicate = gameState.players.find((p) => p.id === socket.id);
-    if (duplicate) return;
-
-    const playerIndex = findEmptyPlayerSlot();
-    if (playerIndex === -1) {
-      console.log("Server full → user is spectator.");
+    // Assign player slot
+    const idx = gameState.players.findIndex((p) => !p.id);
+    if (idx === -1) {
+      console.log("Server full → spectator mode");
       socket.emit("state", gameState);
       return;
     }
 
-    gameState.players[playerIndex].id = socket.id;
-    gameState.players[playerIndex].connected = true;
+    gameState.players[idx].id = socket.id;
+    gameState.players[idx].connected = true;
+    gameState.players[idx].input = {};
 
-    socket.emit("assignPlayer", playerIndex);
-    updateGameMessage();
-    broadcastState();
+    socket.emit("assignPlayer", idx);
 
-    socket.on("move", ({ index, player }) => handlePlayerMove(index, player));
-    socket.on("restart", () => resetGame());
+    socket.on("input", (input) => {
+      if (gameState.players[idx]) gameState.players[idx].input = input;
+    });
+
+    socket.on("restart", () => {
+      gameState = createInitialState();
+    });
 
     socket.on("disconnect", () => {
       console.log(`❌ User disconnected: ${socket.id}`);
-      const idx = gameState.players.findIndex((p) => p.id === socket.id);
-      if (idx !== -1) {
-        gameState.players[idx].connected = false;
-        gameState.players[idx].id = null;
-      }
-      updateGameMessage();
-      broadcastState();
+      if (gameState.players[idx]) gameState.players[idx] = { ...gameState.players[idx], id: null, connected: false, input: {} };
     });
   });
 
-  // --- Debugging Socket.IO engine events ---
-  io.engine.on("connection_error", (err) => {
-    console.log("❌ Connection error:", err.req?.url, err.message);
-  });
-
-  io.engine.on("upgrade", (req) => {
-    console.log("⚡ Upgrade request from:", req.headers.host);
-  });
-
-  // --- 6. Start Server ---
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 });
