@@ -44,10 +44,7 @@ const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: [
-      "https://vince2245.github.io",   // GitHub Pages frontend
-      "http://localhost:3000",        // local testing
-    ],
+    origin: "*",
     methods: ["GET", "POST"],
   },
 });
