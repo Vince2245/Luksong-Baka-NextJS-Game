@@ -1,5 +1,7 @@
+// server.js
 const express = require("express");
 const http = require("http");
+const next = require("next");
 const { Server } = require("socket.io");
 
 // --- 1. Game Configuration ---
@@ -38,161 +40,161 @@ function createInitialState() {
   };
 }
 
-// --- 3. Express + HTTP Server Setup ---
-const app = express();
-const httpServer = http.createServer(app);
+// --- 3. Prepare Next.js ---
+const dev = process.env.NODE_ENV !== "production";
+const nextApp = next({ dev });
+const handle = nextApp.getRequestHandler();
 
-const io = new Server(httpServer, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-  },
-});
+nextApp.prepare().then(() => {
+  const app = express();
+  const server = http.createServer(app);
+  const io = new Server(server, {
+    cors: { origin: "*", methods: ["GET", "POST"] },
+  });
 
-// Health check route
-app.get("/", (req, res) => {
-  res.send("✅ Luksong Baka Socket.IO server is running on Render!");
-});
+  // --- Health check route ---
+  app.get("/health", (req, res) => {
+    res.send("✅ Luksong Baka server is running!");
+  });
 
-// --- 4. Game Logic ---
-function resetGame() {
-  if (gameState.levelIncreaseTimeout) {
-    clearTimeout(gameState.levelIncreaseTimeout);
+  // --- Serve Next.js pages ---
+  app.all("*", (req, res) => handle(req, res));
+
+  // --- 4. Game Logic Functions ---
+  function resetGame() {
+    if (gameState.levelIncreaseTimeout) clearTimeout(gameState.levelIncreaseTimeout);
+    gameState = createInitialState();
+
+    io.allSockets().then((sockets) => {
+      sockets.forEach((socketId) => {
+        const playerIndex = findEmptyPlayerSlot();
+        if (playerIndex !== -1) {
+          gameState.players[playerIndex].id = socketId;
+          gameState.players[playerIndex].connected = true;
+        }
+      });
+      updateGameMessage();
+      broadcastState();
+    });
   }
-  gameState = createInitialState();
 
-  io.allSockets().then((sockets) => {
-    sockets.forEach((socketId) => {
-      const playerIndex = findEmptyPlayerSlot();
-      if (playerIndex !== -1) {
-        gameState.players[playerIndex].id = socketId;
-        gameState.players[playerIndex].connected = true;
+  function handlePlayerMove(playerIndex, moveData) {
+    if (gameState.gameOver) return;
+
+    gameState.players[playerIndex] = { ...gameState.players[playerIndex], ...moveData };
+    const player = gameState.players[playerIndex];
+
+    if (checkCollision(player)) {
+      gameState.gameOver = true;
+      gameState.message = "Game Over! You touched the baka. Press R to Restart.";
+      broadcastState();
+      return;
+    }
+
+    if (player.y >= GAME_CONFIG.GROUND_Y && player.x > gameState.baka.x + GAME_CONFIG.BAKA_WIDTH) {
+      player.crossed = true;
+    }
+
+    const allCrossed = gameState.players.every((p) => !p.connected || p.crossed);
+    if (allCrossed && !gameState.levelIncreaseTimeout) startNextRound();
+
+    broadcastState();
+  }
+
+  function checkCollision(player) {
+    const bakaTop = gameState.baka.y - gameState.baka.height;
+    const bakaLeft = gameState.baka.x;
+    const bakaRight = gameState.baka.x + GAME_CONFIG.BAKA_WIDTH;
+
+    return (
+      player.x + GAME_CONFIG.PLAYER_RADIUS > bakaLeft &&
+      player.x - GAME_CONFIG.PLAYER_RADIUS < bakaRight &&
+      player.y + GAME_CONFIG.PLAYER_RADIUS > bakaTop &&
+      player.y - GAME_CONFIG.PLAYER_RADIUS < gameState.baka.y &&
+      player.vy > 0
+    );
+  }
+
+  function startNextRound() {
+    gameState.message = "Great! Cow gets taller. Next round in 3 seconds!";
+    broadcastState();
+
+    gameState.levelIncreaseTimeout = setTimeout(() => {
+      gameState.score++;
+      if (gameState.score >= GAME_CONFIG.LEVEL_LIMIT) {
+        gameState.message = `🎉 Congratulations! You reached level ${GAME_CONFIG.LEVEL_LIMIT}. Resetting.`;
+        gameState.score = 0;
+        gameState.baka.height = GAME_CONFIG.BAKA_BASE_HEIGHT;
+      } else {
+        gameState.message = "Jump over!";
+        gameState.baka.height += GAME_CONFIG.BAKA_HEIGHT_INCREASE;
       }
-    });
-    updateGameMessage();
-    broadcastState();
-  });
-}
 
-function handlePlayerMove(playerIndex, moveData) {
-  if (gameState.gameOver) return;
+      gameState.players.forEach((p, idx) => {
+        p.x = idx === 0 ? 80 : 160;
+        p.y = GAME_CONFIG.GROUND_Y;
+        p.vy = 0;
+        p.jumping = false;
+        p.crossed = false;
+      });
 
-  gameState.players[playerIndex] = { ...gameState.players[playerIndex], ...moveData };
-  const player = gameState.players[playerIndex];
-
-  const hasCollided = checkCollision(player);
-  if (hasCollided) {
-    gameState.gameOver = true;
-    gameState.message = "Game Over! You touched the baka. Press R to Restart.";
-    broadcastState();
-    return;
+      gameState.levelIncreaseTimeout = null;
+      broadcastState();
+    }, GAME_CONFIG.ROUND_DELAY);
   }
 
-  if (player.y >= GAME_CONFIG.GROUND_Y && player.x > gameState.baka.x + GAME_CONFIG.BAKA_WIDTH) {
-    player.crossed = true;
+  function findEmptyPlayerSlot() {
+    return gameState.players.findIndex((p) => !p.connected);
   }
 
-  const allCrossed = gameState.players.every((p) => !p.connected || p.crossed);
-  if (allCrossed && !gameState.levelIncreaseTimeout) {
-    startNextRound();
+  function updateGameMessage() {
+    const connectedPlayers = gameState.players.filter((p) => p.connected).length;
+    gameState.message =
+      connectedPlayers < 2 ? "Waiting for another player..." : "Press Space to Jump Over the Baka!";
   }
 
-  broadcastState();
-}
+  function broadcastState() {
+    io.emit("state", gameState);
+  }
 
-function checkCollision(player) {
-  const bakaTop = gameState.baka.y - gameState.baka.height;
-  const bakaLeft = gameState.baka.x;
-  const bakaRight = gameState.baka.x + GAME_CONFIG.BAKA_WIDTH;
+  // --- 5. Networking ---
+  io.on("connection", (socket) => {
+    console.log(`⚡ User connected: ${socket.id}`);
 
-  return (
-    player.x + GAME_CONFIG.PLAYER_RADIUS > bakaLeft &&
-    player.x - GAME_CONFIG.PLAYER_RADIUS < bakaRight &&
-    player.y + GAME_CONFIG.PLAYER_RADIUS > bakaTop &&
-    player.y - GAME_CONFIG.PLAYER_RADIUS < gameState.baka.y &&
-    player.vy > 0
-  );
-}
+    // Prevent duplicate connections from same client
+    const duplicate = gameState.players.find((p) => p.id === socket.id);
+    if (duplicate) return;
 
-function startNextRound() {
-  gameState.message = "Great! Cow gets taller. Next round in 3 seconds!";
-  broadcastState();
-
-  gameState.levelIncreaseTimeout = setTimeout(() => {
-    gameState.score++;
-    if (gameState.score >= GAME_CONFIG.LEVEL_LIMIT) {
-      gameState.message = `🎉 Congratulations! You reached level ${GAME_CONFIG.LEVEL_LIMIT}. Resetting.`;
-      gameState.score = 0;
-      gameState.baka.height = GAME_CONFIG.BAKA_BASE_HEIGHT;
-    } else {
-      gameState.message = "Jump over!";
-      gameState.baka.height += GAME_CONFIG.BAKA_HEIGHT_INCREASE;
+    const playerIndex = findEmptyPlayerSlot();
+    if (playerIndex === -1) {
+      console.log("Server full → user is spectator.");
+      socket.emit("state", gameState);
+      return;
     }
 
-    gameState.players.forEach((p, idx) => {
-      p.x = idx === 0 ? 80 : 160;
-      p.y = GAME_CONFIG.GROUND_Y;
-      p.vy = 0;
-      p.jumping = false;
-      p.crossed = false;
-    });
+    gameState.players[playerIndex].id = socket.id;
+    gameState.players[playerIndex].connected = true;
 
-    gameState.levelIncreaseTimeout = null;
-    broadcastState();
-  }, GAME_CONFIG.ROUND_DELAY);
-}
-
-function findEmptyPlayerSlot() {
-  return gameState.players.findIndex((p) => !p.connected);
-}
-
-function updateGameMessage() {
-  const connectedPlayers = gameState.players.filter((p) => p.connected).length;
-  if (connectedPlayers < 2) {
-    gameState.message = "Waiting for another player...";
-  } else {
-    gameState.message = "Press Space to Jump Over the Baka!";
-  }
-}
-
-// --- 5. Networking ---
-function broadcastState() {
-  io.emit("state", gameState);
-}
-
-io.on("connection", (socket) => {
-  console.log(`⚡ User connected: ${socket.id}`);
-
-  const playerIndex = findEmptyPlayerSlot();
-  if (playerIndex === -1) {
-    console.log("Server full → user is spectator.");
-    socket.emit("state", gameState);
-    return;
-  }
-
-  gameState.players[playerIndex].id = socket.id;
-  gameState.players[playerIndex].connected = true;
-  socket.emit("assignPlayer", playerIndex);
-
-  updateGameMessage();
-  broadcastState();
-
-  socket.on("move", ({ index, player }) => handlePlayerMove(index, player));
-  socket.on("restart", () => resetGame());
-
-  socket.on("disconnect", () => {
-    console.log(`❌ User disconnected: ${socket.id}`);
-    const idx = gameState.players.findIndex((p) => p.id === socket.id);
-    if (idx !== -1) {
-      gameState.players[idx].connected = false;
-      gameState.players[idx].id = null;
-    }
+    socket.emit("assignPlayer", playerIndex);
     updateGameMessage();
     broadcastState();
+
+    socket.on("move", ({ index, player }) => handlePlayerMove(index, player));
+    socket.on("restart", () => resetGame());
+
+    socket.on("disconnect", () => {
+      console.log(`❌ User disconnected: ${socket.id}`);
+      const idx = gameState.players.findIndex((p) => p.id === socket.id);
+      if (idx !== -1) {
+        gameState.players[idx].connected = false;
+        gameState.players[idx].id = null;
+      }
+      updateGameMessage();
+      broadcastState();
+    });
   });
+
+  // --- 6. Start Server ---
+  const PORT = process.env.PORT;
+  server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 });
-
-// --- 6. Start Server ---
-const PORT = process.env.PORT; // do NOT default to 3000 or 3001
-httpServer.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-      
