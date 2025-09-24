@@ -22,7 +22,7 @@ export default function Home() {
       {/* Buttons */}
       <div className="flex gap-6">
         <a
-          href="/game/page.js"
+          href="src/app/game/page.js"
           className="px-8 py-4 bg-green-700 text-white rounded-2xl shadow-lg hover:bg-green-800 transition text-xl font-bold"
         >
           🎮 Start Game
