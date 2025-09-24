@@ -44,19 +44,20 @@ const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: ["https://vince2245.github.io"], // allow GitHub Pages
+    origin: [
+      "https://vince2245.github.io",   // GitHub Pages frontend
+      "http://localhost:3000",        // local testing
+    ],
     methods: ["GET", "POST"],
-    credentials: false,
   },
-  transports: ["websocket"],
 });
 
-// Health check / test route
+// Health check route
 app.get("/", (req, res) => {
-  res.send("Luksong Baka Socket.IO server is running 🚀");
+  res.send("✅ Luksong Baka Socket.IO server is running on Render!");
 });
 
-// --- 4. Game Logic Functions (same as your version) ---
+// --- 4. Game Logic ---
 function resetGame() {
   if (gameState.levelIncreaseTimeout) {
     clearTimeout(gameState.levelIncreaseTimeout);
@@ -123,7 +124,7 @@ function startNextRound() {
   gameState.levelIncreaseTimeout = setTimeout(() => {
     gameState.score++;
     if (gameState.score >= GAME_CONFIG.LEVEL_LIMIT) {
-      gameState.message = `Congratulations! You reached level ${GAME_CONFIG.LEVEL_LIMIT}. Resetting.`;
+      gameState.message = `🎉 Congratulations! You reached level ${GAME_CONFIG.LEVEL_LIMIT}. Resetting.`;
       gameState.score = 0;
       gameState.baka.height = GAME_CONFIG.BAKA_BASE_HEIGHT;
     } else {
@@ -163,11 +164,11 @@ function broadcastState() {
 }
 
 io.on("connection", (socket) => {
-  console.log(`User connected: ${socket.id}`);
+  console.log(`⚡ User connected: ${socket.id}`);
 
   const playerIndex = findEmptyPlayerSlot();
   if (playerIndex === -1) {
-    console.log("Server is full. New user is a spectator.");
+    console.log("Server full → user is spectator.");
     socket.emit("state", gameState);
     return;
   }
@@ -180,18 +181,14 @@ io.on("connection", (socket) => {
   broadcastState();
 
   socket.on("move", ({ index, player }) => handlePlayerMove(index, player));
-
-  socket.on("restart", () => {
-    console.log("Restarting game...");
-    resetGame();
-  });
+  socket.on("restart", () => resetGame());
 
   socket.on("disconnect", () => {
-    console.log(`User disconnected: ${socket.id}`);
-    const playerIndex = gameState.players.findIndex((p) => p.id === socket.id);
-    if (playerIndex !== -1) {
-      gameState.players[playerIndex].connected = false;
-      gameState.players[playerIndex].id = null;
+    console.log(`❌ User disconnected: ${socket.id}`);
+    const idx = gameState.players.findIndex((p) => p.id === socket.id);
+    if (idx !== -1) {
+      gameState.players[idx].connected = false;
+      gameState.players[idx].id = null;
     }
     updateGameMessage();
     broadcastState();
@@ -201,6 +198,5 @@ io.on("connection", (socket) => {
 // --- 6. Start Server ---
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
-
