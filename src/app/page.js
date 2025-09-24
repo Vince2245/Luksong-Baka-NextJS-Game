@@ -12,7 +12,7 @@ export default function Home() {
       {/* Game Description */}
       <div className="bg-white/80 rounded-xl shadow-lg p-6 mb-8 max-w-xl text-center">
         <p className="mb-3">
-          <span className="font-bold text-green-700">How to Play:</span> Jump over the <b>baka</b> (the "cow" obstacle) as it gets taller every round. Use your <b>arrow keys</b> to move and <b>spacebar</b> to jump. If you hit the baka, it's game over!
+          <span className="font-bold text-green-700">How to Play:</span> Jump over the <b>baka</b> (the &quot;cow&quot; obstacle) as it gets taller every round. Use your <b>arrow keys</b> to move and <b>spacebar</b> to jump. If you hit the baka, it&apos;s game over!
         </p>
         <p>
           <span className="font-bold text-green-700">Goal:</span> See how many levels you can clear. How high can you jump?
