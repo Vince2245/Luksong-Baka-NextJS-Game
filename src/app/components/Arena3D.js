@@ -31,30 +31,29 @@ export default function Arena3D() {
   const lastMovementRef = useRef({ lastSent: null, lastEmit: 0 });
   const throttledBroadcast = useRef();
 
-  useEffect(() => {
-    socketRef.current = io(SOCKET_URL);
+useEffect(() => {
+  socketRef.current = io(SOCKET_URL, {
+    transports: ["websocket"], // skip polling to avoid 308
+    withCredentials: false,    // don’t send cookies
+  });
 
-    socketRef.current.on("assignPlayer", idx => {
-      setPlayerIndex(idx);
-      setMessage("Press Space to Jump Over the Baka!");
-    });
+  socketRef.current.on("assignPlayer", idx => {
+    setPlayerIndex(idx);
+    setMessage("Press Space to Jump Over the Baka!");
+  });
 
-    socketRef.current.on("state", state => {
-      setPlayers(state.players.map(p => ({
-        ...p,
-        color: "#3498db",
-      })));
-      setBaka(state.baka);
-      setScore(state.score);
-      setMessage(state.message);
-      setGameOver(state.gameOver);
-      setJumpVy(state.jumpVy ?? -12);
-    });
+  socketRef.current.on("state", state => {
+    setPlayers(state.players.map(p => ({ ...p, color: "#3498db" })));
+    setBaka(state.baka);
+    setScore(state.score);
+    setMessage(state.message);
+    setGameOver(state.gameOver);
+    setJumpVy(state.jumpVy ?? -12);
+  });
 
-    socketRef.current.emit("join");
+  return () => socketRef.current.disconnect();
+}, []);
 
-    return () => socketRef.current.disconnect();
-  }, []);
 
   useEffect(() => {
     if (playerIndex === null) return;
