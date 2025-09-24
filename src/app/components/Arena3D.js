@@ -32,9 +32,11 @@ export default function Arena3D() {
   const throttledBroadcast = useRef();
 
 useEffect(() => {
-  socketRef.current = io(SOCKET_URL, {
-    transports: ["websocket"], // skip polling to avoid 308
-    withCredentials: false,    // don’t send cookies
+  socketRef.current = io("https://luksong-baka-nextjs-game.onrender.com", {
+    transports: ["websocket"],  // force WebSocket
+    secure: true,               // enforce wss://
+    withCredentials: false,     // don’t send cookies
+    path: "/socket.io",         // 👈 important for Render
   });
 
   socketRef.current.on("assignPlayer", idx => {
@@ -51,8 +53,18 @@ useEffect(() => {
     setJumpVy(state.jumpVy ?? -12);
   });
 
-  return () => socketRef.current.disconnect();
+  socketRef.current.on("connect_error", (err) => {
+    console.error("Socket connect error:", err.message);
+    setMessage("Connection failed. Check server CORS or path.");
+  });
+
+  return () => {
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+    }
+  };
 }, []);
+
 
 
   useEffect(() => {
