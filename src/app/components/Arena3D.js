@@ -1,6 +1,6 @@
 "use client";
 import React, { useRef, useEffect, useState } from "react";
-import { io } from "socket.io-client";
+import io from "socket.io-client";
 import { throttle } from "lodash";
 
 const WIDTH = 800;
@@ -11,189 +11,180 @@ const BAKA_HEIGHT = 60;
 const GROUND_Y = HEIGHT - 60;
 const GRAVITY = 0.6;
 const PLAYER_SPEED = 7;
+const JUMP_VY = -12;
+
+// --- Connect to server with polling fallback ---
+const socket = io("https://luksong-baka-nextjs-game.onrender.com", {
+  path: "/socket.io",
+  transports: ["websocket", "polling"], // fallback
+  secure: true,
+  withCredentials: false,
+  timeout: 20000, // 20s handshake timeout
+});
 
 export default function Arena3D() {
   const canvasRef = useRef();
-  const socketRef = useRef();
-
-  const [players, setPlayers] = useState([
-    { x: 80, y: GROUND_Y, vy: 0, jumping: false, color: "#3498db", crossed: false },
-    { x: 160, y: GROUND_Y, vy: 0, jumping: false, color: "#3498db", crossed: false },
+  const playerIndexRef = useRef(null);
+  const keysRef = useRef({});
+  const playersRef = useRef([
+    { x: 80, y: GROUND_Y, vy: 0, jumping: false, crossed: false },
+    { x: 160, y: GROUND_Y, vy: 0, jumping: false, crossed: false },
   ]);
-  const [baka, setBaka] = useState({ x: WIDTH / 2 - BAKA_WIDTH / 2, y: GROUND_Y + 20, height: BAKA_HEIGHT });
+  const bakaRef = useRef({ x: WIDTH / 2 - BAKA_WIDTH / 2, y: GROUND_Y + 20, height: BAKA_HEIGHT });
+
   const [score, setScore] = useState(0);
   const [message, setMessage] = useState("Waiting for another player...");
   const [gameOver, setGameOver] = useState(false);
-  const [playerIndex, setPlayerIndex] = useState(null);
-  const [keys, setKeys] = useState({});
-  const [jumpVy, setJumpVy] = useState(-12);
 
-  const lastMovementRef = useRef({ lastSent: null, lastEmit: 0 });
-  const throttledBroadcast = useRef();
+  // --- Throttled network emit (30fps) ---
+  const throttledEmit = useRef(
+    throttle((data) => {
+      socket.emit("move", data);
+    }, 33)
+  );
 
-  // --- Socket.IO Connection ---
+  // --- Socket.IO events ---
   useEffect(() => {
-    const socket = io("https://luksong-baka-nextjs-game.onrender.com", {
-      path: "/socket.io",
-      transports: ["websocket", "polling"], // fallback to polling if websocket fails
-      secure: true,
-      withCredentials: false,
-    });
-
-    socketRef.current = socket;
-
-    // Debugging logs
-    socket.on("connect", () => console.log("✅ Connected to server:", socket.id));
-    socket.on("disconnect", (reason) => console.log("⚠️ Disconnected:", reason));
-    socket.on("connect_error", (err) => {
-      console.error("❌ Connect error:", err);
-      setMessage("Connection failed. Check server CORS or path.");
-    });
-    socket.on("connect_timeout", () => console.warn("⏱ Connect timeout"));
-    socket.io.on("reconnect_attempt", (attempt) => console.log(`🔄 Reconnect attempt #${attempt}`));
-
-    // Game events
     socket.on("assignPlayer", (idx) => {
-      setPlayerIndex(idx);
+      playerIndexRef.current = idx;
       setMessage("Press Space to Jump Over the Baka!");
     });
 
     socket.on("state", (state) => {
-      setPlayers(state.players.map((p) => ({ ...p, color: "#3498db" })));
-      setBaka(state.baka);
+      // Update refs directly (no React state)
+      playersRef.current = state.players.map((p) => ({ ...p }));
+      bakaRef.current = { ...state.baka };
       setScore(state.score);
       setMessage(state.message);
       setGameOver(state.gameOver);
-      setJumpVy(state.jumpVy ?? -12);
     });
 
-    return () => {
-      socket.disconnect();
-      console.log("🛑 Socket disconnected manually");
-    };
+    socket.on("connect_error", (err) => {
+      console.error("Socket connect error:", err.message);
+      setMessage("Connection failed. Check server or network.");
+    });
+
+    return () => socket.disconnect();
   }, []);
 
-  // --- Keyboard input ---
+  // --- Keyboard handling ---
   useEffect(() => {
-    if (playerIndex === null) return;
-    const down = (e) => setKeys((k) => ({ ...k, [e.key]: true }));
-    const up = (e) => setKeys((k) => ({ ...k, [e.key]: false }));
+    const down = (e) => (keysRef.current[e.key] = true);
+    const up = (e) => (keysRef.current[e.key] = false);
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
+
+    const restartHandler = (e) => {
+      if (e.key === "r" || e.key === "R") socket.emit("restart");
+    };
+    window.addEventListener("keydown", restartHandler);
+
     return () => {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
+      window.removeEventListener("keydown", restartHandler);
     };
-  }, [playerIndex]);
+  }, []);
 
-  // --- Movement loop ---
+  // --- Main game loop ---
   useEffect(() => {
-    if (playerIndex === null || !players[playerIndex]) return;
     let anim;
-
     function moveLoop() {
-      if (!socketRef.current) return;
+      const idx = playerIndexRef.current;
+      if (idx === null) {
+        anim = requestAnimationFrame(moveLoop);
+        return;
+      }
 
-      let p = { ...players[playerIndex] };
+      const players = playersRef.current;
+      const baka = bakaRef.current;
+      const keys = keysRef.current;
+      const p = players[idx];
 
-      // Move left/right
+      // Horizontal movement
       if (keys["ArrowLeft"]) p.x -= PLAYER_SPEED;
       if (keys["ArrowRight"]) p.x += PLAYER_SPEED;
       p.x = Math.max(PLAYER_RADIUS, Math.min(WIDTH - PLAYER_RADIUS, p.x));
 
       // Jump
       if ((keys[" "] || keys["Spacebar"]) && !p.jumping && p.y >= GROUND_Y) {
-        p.vy = jumpVy;
+        p.vy = JUMP_VY;
         p.jumping = true;
       }
 
       // Gravity
       p.vy += GRAVITY;
       p.y += p.vy;
-
       if (p.y >= GROUND_Y) {
         p.y = GROUND_Y;
         p.vy = 0;
         p.jumping = false;
       }
 
-      // Throttle updates to 30fps
-      const now = performance.now();
-      if (now - lastMovementRef.current.lastEmit > 33) {
-        socketRef.current.emit("move", { index: playerIndex, player: p });
-        lastMovementRef.current = { lastSent: p, lastEmit: now };
-      }
+      // Emit position throttled
+      throttledEmit.current({ index: idx, player: p });
+
+      // Draw canvas
+      drawCanvas(players, baka);
 
       anim = requestAnimationFrame(moveLoop);
     }
 
-    anim = requestAnimationFrame(moveLoop);
-    return () => cancelAnimationFrame(anim);
-  }, [playerIndex, players, keys, jumpVy]);
+    function drawCanvas(players, baka) {
+      const ctx = canvasRef.current.getContext("2d");
+      ctx.clearRect(0, 0, WIDTH, HEIGHT);
 
-  // --- Restart key ---
-  useEffect(() => {
-    if (playerIndex === null) return;
-    const handle = (e) => {
-      if (e.key === "r" || e.key === "R") {
-        socketRef.current.emit("restart");
-        console.log("🔄 Restart requested");
-      }
-    };
-    window.addEventListener("keydown", handle);
-    return () => window.removeEventListener("keydown", handle);
-  }, [playerIndex]);
+      // Background
+      ctx.fillStyle = "#7cfc00";
+      ctx.fillRect(0, GROUND_Y + PLAYER_RADIUS, WIDTH, HEIGHT - GROUND_Y);
 
-  // --- Canvas rendering ---
-  useEffect(() => {
-    const ctx = canvasRef.current.getContext("2d");
-    ctx.clearRect(0, 0, WIDTH, HEIGHT);
-
-    // Ground
-    ctx.fillStyle = "#7cfc00";
-    ctx.fillRect(0, GROUND_Y + PLAYER_RADIUS, WIDTH, HEIGHT - GROUND_Y);
-
-    // Baka
-    ctx.fillStyle = "#964B00";
-    ctx.fillRect(baka.x, baka.y - baka.height, BAKA_WIDTH, baka.height);
-    ctx.beginPath();
-    ctx.arc(baka.x + BAKA_WIDTH / 2, baka.y - baka.height + 20, 18, 0, 2 * Math.PI);
-    ctx.fillStyle = "#ffe0b2";
-    ctx.fill();
-    ctx.strokeStyle = "#222";
-    ctx.stroke();
-
-    // Players
-    players.forEach((p, i) => {
-      if (!p) return;
+      // Baka
+      ctx.fillStyle = "#964B00";
+      ctx.fillRect(baka.x, baka.y - baka.height, BAKA_WIDTH, baka.height);
       ctx.beginPath();
-      ctx.arc(p.x, p.y, PLAYER_RADIUS, 0, 2 * Math.PI);
-      ctx.fillStyle = "#3498db";
+      ctx.arc(baka.x + BAKA_WIDTH / 2, baka.y - baka.height + 20, 18, 0, 2 * Math.PI);
+      ctx.fillStyle = "#ffe0b2";
       ctx.fill();
       ctx.strokeStyle = "#222";
-      ctx.lineWidth = 3;
       ctx.stroke();
-      ctx.font = "16px sans-serif";
+
+      // Players
+      players.forEach((pl, i) => {
+        if (!pl) return;
+        ctx.beginPath();
+        ctx.arc(pl.x, pl.y, PLAYER_RADIUS, 0, 2 * Math.PI);
+        ctx.fillStyle = "#3498db";
+        ctx.fill();
+        ctx.strokeStyle = "#222";
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        ctx.font = "16px sans-serif";
+        ctx.fillStyle = "#fff";
+        ctx.fillText(i === playerIndexRef.current ? "You" : "Teammate", pl.x - 32, pl.y - 40);
+
+        if (pl.crossed) {
+          ctx.font = "bold 18px sans-serif";
+          ctx.fillStyle = "#0f0";
+          ctx.fillText("✓", pl.x - 8, pl.y - 50);
+        }
+      });
+
+      // Score & messages
+      ctx.font = "24px sans-serif";
       ctx.fillStyle = "#fff";
-      ctx.fillText(i === playerIndex ? "You" : "Teammate", p.x - 32, p.y - 40);
-      if (p.crossed) {
-        ctx.font = "bold 18px sans-serif";
-        ctx.fillStyle = "#0f0";
-        ctx.fillText("✓", p.x - 8, p.y - 50);
+      ctx.fillText(`Level: ${score + 1}`, WIDTH / 2 - 40, 40);
+
+      if (message) {
+        ctx.font = "28px sans-serif";
+        ctx.fillStyle = "#f7c325";
+        ctx.fillText(message, WIDTH / 2 - 220, 80);
       }
-    });
-
-    // UI
-    ctx.font = "24px sans-serif";
-    ctx.fillStyle = "#fff";
-    ctx.fillText(`Level: ${score + 1}`, WIDTH / 2 - 40, 40);
-
-    if (message) {
-      ctx.font = "28px sans-serif";
-      ctx.fillStyle = "#f7c325";
-      ctx.fillText(message, WIDTH / 2 - 220, 80);
     }
-  }, [players, baka, score, message, playerIndex]);
+
+    anim = requestAnimationFrame(moveLoop);
+    return () => cancelAnimationFrame(anim);
+  }, [score, message]);
 
   return (
     <div
