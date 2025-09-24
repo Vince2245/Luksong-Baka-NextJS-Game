@@ -57,8 +57,9 @@ nextApp.prepare().then(() => {
     res.send("✅ Luksong Baka server is running!");
   });
 
-  // --- Serve Next.js pages ---
-  app.all("*", (req, res) => handle(req, res));
+  // --- Serve Next.js pages correctly ---
+  // FIX: Use app.use instead of app.all("*") to avoid path-to-regexp error
+  app.use((req, res) => handle(req, res));
 
   // --- 4. Game Logic Functions ---
   function resetGame() {
