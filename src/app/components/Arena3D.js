@@ -1,6 +1,6 @@
 "use client";
 import React, { useRef, useEffect, useState } from "react";
-import io from "socket.io-client";
+import { io } from "socket.io-client";
 import { throttle } from "lodash";
 
 const WIDTH = 800;
@@ -12,14 +12,10 @@ const GROUND_Y = HEIGHT - 60;
 const GRAVITY = 0.6;
 const PLAYER_SPEED = 7;
 
-// Connect to Render’s public URL ONLY (no port)
-const socket = io("https://luksong-baka-nextjs-game.onrender.com", {
-  transports: ["websocket"], // ensures WSS is used
-});
-
-
 export default function Arena3D() {
   const canvasRef = useRef();
+  const socketRef = useRef();
+
   const [players, setPlayers] = useState([
     { x: 80, y: GROUND_Y, vy: 0, jumping: false, color: "#3498db", crossed: false },
     { x: 160, y: GROUND_Y, vy: 0, jumping: false, color: "#3498db", crossed: false },
@@ -31,50 +27,57 @@ export default function Arena3D() {
   const [playerIndex, setPlayerIndex] = useState(null);
   const [keys, setKeys] = useState({});
   const [jumpVy, setJumpVy] = useState(-12);
-  const socketRef = useRef();
+
   const lastMovementRef = useRef({ lastSent: null, lastEmit: 0 });
   const throttledBroadcast = useRef();
 
-useEffect(() => {
-  socketRef.current = io("https://luksong-baka-nextjs-game.onrender.com", {
-    transports: ["websocket"],  // force WebSocket
-    secure: true,               // enforce wss://
-    withCredentials: false,     // don’t send cookies
-    path: "/socket.io",         // 👈 important for Render
-  });
+  // --- Socket.IO Connection ---
+  useEffect(() => {
+    const socket = io("https://luksong-baka-nextjs-game.onrender.com", {
+      path: "/socket.io",
+      transports: ["websocket", "polling"], // fallback to polling if websocket fails
+      secure: true,
+      withCredentials: false,
+    });
 
-  socketRef.current.on("assignPlayer", idx => {
-    setPlayerIndex(idx);
-    setMessage("Press Space to Jump Over the Baka!");
-  });
+    socketRef.current = socket;
 
-  socketRef.current.on("state", state => {
-    setPlayers(state.players.map(p => ({ ...p, color: "#3498db" })));
-    setBaka(state.baka);
-    setScore(state.score);
-    setMessage(state.message);
-    setGameOver(state.gameOver);
-    setJumpVy(state.jumpVy ?? -12);
-  });
+    // Debugging logs
+    socket.on("connect", () => console.log("✅ Connected to server:", socket.id));
+    socket.on("disconnect", (reason) => console.log("⚠️ Disconnected:", reason));
+    socket.on("connect_error", (err) => {
+      console.error("❌ Connect error:", err);
+      setMessage("Connection failed. Check server CORS or path.");
+    });
+    socket.on("connect_timeout", () => console.warn("⏱ Connect timeout"));
+    socket.io.on("reconnect_attempt", (attempt) => console.log(`🔄 Reconnect attempt #${attempt}`));
 
-  socketRef.current.on("connect_error", (err) => {
-    console.error("Socket connect error:", err.message);
-    setMessage("Connection failed. Check server CORS or path.");
-  });
+    // Game events
+    socket.on("assignPlayer", (idx) => {
+      setPlayerIndex(idx);
+      setMessage("Press Space to Jump Over the Baka!");
+    });
 
-  return () => {
-    if (socketRef.current) {
-      socketRef.current.disconnect();
-    }
-  };
-}, []);
+    socket.on("state", (state) => {
+      setPlayers(state.players.map((p) => ({ ...p, color: "#3498db" })));
+      setBaka(state.baka);
+      setScore(state.score);
+      setMessage(state.message);
+      setGameOver(state.gameOver);
+      setJumpVy(state.jumpVy ?? -12);
+    });
 
+    return () => {
+      socket.disconnect();
+      console.log("🛑 Socket disconnected manually");
+    };
+  }, []);
 
-
+  // --- Keyboard input ---
   useEffect(() => {
     if (playerIndex === null) return;
-    const down = e => setKeys(k => ({ ...k, [e.key]: true }));
-    const up = e => setKeys(k => ({ ...k, [e.key]: false }));
+    const down = (e) => setKeys((k) => ({ ...k, [e.key]: true }));
+    const up = (e) => setKeys((k) => ({ ...k, [e.key]: false }));
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     return () => {
@@ -83,32 +86,28 @@ useEffect(() => {
     };
   }, [playerIndex]);
 
+  // --- Movement loop ---
   useEffect(() => {
     if (playerIndex === null || !players[playerIndex]) return;
     let anim;
 
-    // Replace the existing moveLoop function with this optimized version
-    function moveLoop(ts) {
+    function moveLoop() {
       if (!socketRef.current) return;
-      
-      let p = { ...players[playerIndex] };
-      let bakaLeft = baka.x;
-      let bakaRight = baka.x + BAKA_WIDTH;
 
-      // Only update position if keys are pressed
+      let p = { ...players[playerIndex] };
+
+      // Move left/right
       if (keys["ArrowLeft"]) p.x -= PLAYER_SPEED;
       if (keys["ArrowRight"]) p.x += PLAYER_SPEED;
-      
-      // Clamp position
       p.x = Math.max(PLAYER_RADIUS, Math.min(WIDTH - PLAYER_RADIUS, p.x));
 
-      // Handle jump
+      // Jump
       if ((keys[" "] || keys["Spacebar"]) && !p.jumping && p.y >= GROUND_Y) {
         p.vy = jumpVy;
         p.jumping = true;
       }
 
-      // Apply gravity
+      // Gravity
       p.vy += GRAVITY;
       p.y += p.vy;
 
@@ -118,7 +117,7 @@ useEffect(() => {
         p.jumping = false;
       }
 
-      // Throttle network updates to 30fps
+      // Throttle updates to 30fps
       const now = performance.now();
       if (now - lastMovementRef.current.lastEmit > 33) {
         socketRef.current.emit("move", { index: playerIndex, player: p });
@@ -130,40 +129,31 @@ useEffect(() => {
 
     anim = requestAnimationFrame(moveLoop);
     return () => cancelAnimationFrame(anim);
-  }, [playerIndex, players, baka, jumpVy, keys]);
+  }, [playerIndex, players, keys, jumpVy]);
 
-  useEffect(() => {
-    throttledBroadcast.current = throttle((data) => {
-      if (socketRef.current) {
-        socketRef.current.emit("move", data);
-      }
-    }, 33); // ~30fps
-
-    return () => {
-      if (throttledBroadcast.current?.cancel) {
-        throttledBroadcast.current.cancel();
-      }
-    };
-  }, []);
-
+  // --- Restart key ---
   useEffect(() => {
     if (playerIndex === null) return;
-    const handle = e => {
-      if ((e.key === "r" || e.key === "R")) {
+    const handle = (e) => {
+      if (e.key === "r" || e.key === "R") {
         socketRef.current.emit("restart");
+        console.log("🔄 Restart requested");
       }
     };
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
   }, [playerIndex]);
 
+  // --- Canvas rendering ---
   useEffect(() => {
     const ctx = canvasRef.current.getContext("2d");
     ctx.clearRect(0, 0, WIDTH, HEIGHT);
 
+    // Ground
     ctx.fillStyle = "#7cfc00";
     ctx.fillRect(0, GROUND_Y + PLAYER_RADIUS, WIDTH, HEIGHT - GROUND_Y);
 
+    // Baka
     ctx.fillStyle = "#964B00";
     ctx.fillRect(baka.x, baka.y - baka.height, BAKA_WIDTH, baka.height);
     ctx.beginPath();
@@ -172,12 +162,8 @@ useEffect(() => {
     ctx.fill();
     ctx.strokeStyle = "#222";
     ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(baka.x + BAKA_WIDTH / 2 - 7, baka.y - baka.height + 18, 3, 0, 2 * Math.PI);
-    ctx.arc(baka.x + BAKA_WIDTH / 2 + 7, baka.y - baka.height + 18, 3, 0, 2 * Math.PI);
-    ctx.fillStyle = "#222";
-    ctx.fill();
 
+    // Players
     players.forEach((p, i) => {
       if (!p) return;
       ctx.beginPath();
@@ -197,6 +183,7 @@ useEffect(() => {
       }
     });
 
+    // UI
     ctx.font = "24px sans-serif";
     ctx.fillStyle = "#fff";
     ctx.fillText(`Level: ${score + 1}`, WIDTH / 2 - 40, 40);
