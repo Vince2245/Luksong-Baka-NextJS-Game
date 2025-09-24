@@ -193,7 +193,6 @@ io.on("connection", (socket) => {
 });
 
 // --- 6. Start Server ---
-const PORT = process.env.PORT || 3001;
-httpServer.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+const PORT = process.env.PORT; // do NOT default to 3000 or 3001
+httpServer.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+      

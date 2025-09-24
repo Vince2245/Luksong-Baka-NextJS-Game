@@ -11,7 +11,11 @@ const BAKA_HEIGHT = 60;
 const GROUND_Y = HEIGHT - 60;
 const GRAVITY = 0.6;
 const PLAYER_SPEED = 7;
-const socket = io("https://luksong-baka-nextjs-game.onrender.com");
+
+// Connect to Render’s public URL ONLY (no port)
+const socket = io("https://luksong-baka-nextjs-game.onrender.com", {
+  transports: ["websocket"], // ensures WSS is used
+});
 
 
 export default function Arena3D() {
