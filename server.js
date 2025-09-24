@@ -48,8 +48,10 @@ const handle = nextApp.getRequestHandler();
 nextApp.prepare().then(() => {
   const app = express();
   const server = http.createServer(app);
+
   const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] },
+    transports: ["websocket", "polling"], // ensure fallback works
   });
 
   // --- Health check route ---
@@ -57,11 +59,10 @@ nextApp.prepare().then(() => {
     res.send("✅ Luksong Baka server is running!");
   });
 
-  // --- Serve Next.js pages correctly ---
-  // FIX: Use app.use instead of app.all("*") to avoid path-to-regexp error
+  // Serve Next.js pages correctly
   app.use((req, res) => handle(req, res));
 
-  // --- 4. Game Logic Functions ---
+  // --- 4. Game logic functions ---
   function resetGame() {
     if (gameState.levelIncreaseTimeout) clearTimeout(gameState.levelIncreaseTimeout);
     gameState = createInitialState();
@@ -158,11 +159,10 @@ nextApp.prepare().then(() => {
     io.emit("state", gameState);
   }
 
-  // --- 5. Networking ---
+  // --- 5. Networking with debugging ---
   io.on("connection", (socket) => {
     console.log(`⚡ User connected: ${socket.id}`);
 
-    // Prevent duplicate connections from same client
     const duplicate = gameState.players.find((p) => p.id === socket.id);
     if (duplicate) return;
 
@@ -195,7 +195,16 @@ nextApp.prepare().then(() => {
     });
   });
 
+  // --- Debugging Socket.IO engine events ---
+  io.engine.on("connection_error", (err) => {
+    console.log("❌ Connection error:", err.req?.url, err.message);
+  });
+
+  io.engine.on("upgrade", (req) => {
+    console.log("⚡ Upgrade request from:", req.headers.host);
+  });
+
   // --- 6. Start Server ---
-  const PORT = process.env.PORT;
+  const PORT = process.env.PORT || 3000;
   server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 });
