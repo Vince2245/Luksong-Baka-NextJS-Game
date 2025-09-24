@@ -200,6 +200,7 @@ io.on("connection", (socket) => {
 
 // --- 6. Start Server ---
 const PORT = process.env.PORT || 3001;
-httpServer.listen(PORT, "0.0.0.0", () => {
-  console.log(`Socket.IO server running on port ${PORT}`);
+httpServer.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
+
